@@ -17,7 +17,7 @@ const productSchema = new mongoose.Schema({
   images: { type: [String], default: [] }, // Supabase public URLs - NOT required
   price: { type: Number, required: true },
   mrp: { type: Number, required: true },
-  stock: { type: Number, default: 0 },
+  stock: { type: Number, default: 0, min: [0, 'Stock cannot be negative'] },
   hasSizes: { type: Boolean, default: false }, // Flag to indicate if product has multiple sizes
   attributes: {
     ratingAvg: { type: Number, default: 0 },

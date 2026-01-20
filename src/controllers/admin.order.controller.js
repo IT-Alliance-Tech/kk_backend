@@ -7,6 +7,8 @@
 
 import mongoose from 'mongoose';
 import Order from '../models/Order.js';
+import Product from '../models/Product.js';
+import ProductVariant from '../models/ProductVariant.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -175,10 +177,103 @@ export const updateOrderStatus = async (req, res) => {
       });
     }
 
+    // Fetch current order to check previous status
+    const currentOrder = await Order.findById(id);
+    if (!currentOrder) {
+      return res.status(404).json({
+        statusCode: 404,
+        success: false,
+        error: { message: 'Order not found' },
+        data: null
+      });
+    }
+
+    const previousStatus = currentOrder.status;
+
+    // --- INVENTORY LOGIC: Stock Deduction ---
+    // Deduct stock when order moves to 'accepted' or 'processing'
+    if (
+      (status === 'accepted' || status === 'processing') &&
+      !currentOrder.stockDeducted &&
+      previousStatus !== 'accepted' &&
+      previousStatus !== 'processing'
+    ) {
+      try {
+        for (const item of currentOrder.items) {
+          if (item.variantId) {
+            // Variant-level stock
+            const variant = await ProductVariant.findById(item.variantId);
+            if (variant && variant.stock >= item.qty) {
+              await ProductVariant.findByIdAndUpdate(
+                item.variantId,
+                { $inc: { stock: -item.qty } },
+                { new: true }
+              );
+            } else {
+              console.warn(`Insufficient variant stock for ${item.variantId}. Skipping deduction.`);
+            }
+          } else {
+            // Product-level stock
+            const product = await Product.findById(item.product);
+            if (product && product.stock >= item.qty) {
+              await Product.findByIdAndUpdate(
+                item.product,
+                { $inc: { stock: -item.qty } },
+                { new: true }
+              );
+            } else {
+              console.warn(`Insufficient product stock for ${item.product}. Skipping deduction.`);
+            }
+          }
+        }
+        // Mark stock as deducted
+        currentOrder.stockDeducted = true;
+      } catch (stockError) {
+        console.error('Stock deduction error:', stockError);
+        // Continue with status update even if stock deduction fails
+      }
+    }
+
+    // --- INVENTORY LOGIC: Stock Restoration ---
+    // Restore stock when order is cancelled or rejected (only if stock was previously deducted)
+    if (
+      (status === 'cancelled' || status === 'rejected') &&
+      currentOrder.stockDeducted &&
+      previousStatus !== 'cancelled' &&
+      previousStatus !== 'rejected'
+    ) {
+      try {
+        for (const item of currentOrder.items) {
+          if (item.variantId) {
+            // Restore variant stock
+            await ProductVariant.findByIdAndUpdate(
+              item.variantId,
+              { $inc: { stock: item.qty } },
+              { new: true }
+            );
+          } else {
+            // Restore product stock
+            await Product.findByIdAndUpdate(
+              item.product,
+              { $inc: { stock: item.qty } },
+              { new: true }
+            );
+          }
+        }
+        // Mark stock as not deducted
+        currentOrder.stockDeducted = false;
+      } catch (stockError) {
+        console.error('Stock restoration error:', stockError);
+        // Continue with status update even if restoration fails
+      }
+    }
+
+    // Update order status
     const order = await Order.findByIdAndUpdate(
       id,
       { 
         status,
+        stockDeducted: currentOrder.stockDeducted,
         updatedAt: new Date()
       },
       { new: true, runValidators: true }
