@@ -12,11 +12,19 @@ export const initiatePayment = async (req, res, next) => {
         }
 
         // 2. Prepare PhonePe payload
-        const merchantId = process.env.PHONEPE_MERCHANT_ID;
+        const merchantId = process.env.PHONEPE_MERCHANT_ID || process.env.PHONEPE_CLIENT_ID;
         const saltKey = process.env.PHONEPE_SALT_KEY;
         const saltIndex = process.env.PHONEPE_SALT_INDEX || 1;
         const hostUrl = process.env.PHONEPE_HOST_URL || "https://api-preprod.phonepe.com/apis/pg-sandbox";
         const callbackUrl = process.env.PHONEPE_CALLBACK_URL || `http://localhost:5173/payment?orderId=${orderId}`; // Fallback for local testing
+
+        // Validate required PhonePe configuration
+        if (!merchantId || !saltKey) {
+            return res.status(500).json({ 
+                success: false, 
+                message: "PhonePe configuration incomplete. Missing MERCHANT_ID/CLIENT_ID or SALT_KEY." 
+            });
+        }
 
         // Transaction ID must be unique
         const merchantTransactionId = `MT${Date.now()}_${orderId}`;
