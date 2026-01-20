@@ -12,6 +12,7 @@ import couponsRoutes from './coupons.routes.js';
 import reviewRoutes from './review.routes.js';
 import homepageRoutes from './homepage.routes.js';
 import returnRoutes from './return.routes.js';
+import paymentRoutes from './payment.routes.js';
 
 // ADMIN AUTH
 import adminAuthRoutes from './admin.auth.routes.js';
@@ -127,6 +128,7 @@ router.use('/orders', orderAliases);
 router.use('/returns', returnRoutes);
 
 router.use('/upload', uploadRoutes);
+router.use('/payment', paymentRoutes);
 
 // Root alias mounts
 router.use('/', rootAliases);
