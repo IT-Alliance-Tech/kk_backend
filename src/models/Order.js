@@ -59,7 +59,10 @@ const orderSchema = new mongoose.Schema({
     txnId: String,
     // keep payment.status separate and simple
     status: { type: String, default: 'init' }
-  }
+  },
+
+  // Inventory tracking flag to prevent double deduction
+  stockDeducted: { type: Boolean, default: false }
 }, { timestamps: true });
 
 export default mongoose.model('Order', orderSchema);
