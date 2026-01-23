@@ -5,7 +5,11 @@ console.log(
   "DEBUG ENV — EMAIL_USER set?",
   !!process.env.EMAIL_USER,
   "OAuth2 credentials configured:",
-  !!(process.env.EMAIL_CLIENT_ID && process.env.EMAIL_CLIENT_SECRET && process.env.EMAIL_REFRESH_TOKEN)
+  !!(
+    process.env.EMAIL_CLIENT_ID &&
+    process.env.EMAIL_CLIENT_SECRET &&
+    process.env.EMAIL_REFRESH_TOKEN
+  ),
 );
 
 import { createServer } from "http";
