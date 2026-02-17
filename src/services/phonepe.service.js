@@ -18,7 +18,7 @@ export const createPayment = async (orderId, amount) => {
         type: "PG_CHECKOUT",
         merchantUrls: {
           redirectUrl: `${process.env.FRONTEND_URL}/checkout/success?orderId=${orderId}`,
-          callbackUrl: `${process.env.FRONTEND_URL}/api/payment/webhook`,
+          callbackUrl: `${process.env.BACKEND_URL || process.env.API_BASE_URL || 'https://kk-backend-5c11.onrender.com'}/api/payment/webhook`,
         },
       },
     },

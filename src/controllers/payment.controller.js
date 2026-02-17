@@ -1,4 +1,5 @@
 import * as phonepeService from "../services/phonepe.service.js";
+import Order from "../models/Order.js";
 
 export const initiatePayment = async (req, res) => {
   try {
@@ -57,6 +58,47 @@ export const checkPaymentStatus = async (req, res) => {
       paymentStatus = "pending";
     }
 
+    // --- PERSIST payment status AND advance order status ---
+    try {
+      const updateFields = { "payment.status": paymentStatus };
+
+      // If payment succeeded, also store the transaction ID from PhonePe
+      const txnId =
+        result.transactionId ||
+        (result.data && result.data.transactionId) ||
+        null;
+      if (txnId) {
+        updateFields["payment.txnId"] = txnId;
+      }
+
+      // State machine: link payment outcome to order status
+      if (paymentStatus === "success") {
+        updateFields["status"] = "accepted"; // Payment confirmed → order accepted
+      } else if (paymentStatus === "failed") {
+        updateFields["status"] = "cancelled"; // Payment failed → order cancelled
+      }
+      // "pending" payment → keep order.status as-is (still "pending")
+
+      const updatedOrder = await Order.findByIdAndUpdate(
+        transactionId,
+        { $set: updateFields },
+        { new: true }
+      );
+
+      if (updatedOrder) {
+        console.log(
+          `Order ${transactionId} updated — payment: ${paymentStatus}, order status: ${updatedOrder.status}`
+        );
+      } else {
+        console.warn(
+          `Order ${transactionId} not found in DB — payment status not persisted`
+        );
+      }
+    } catch (dbError) {
+      // Log but don't fail the response — the PhonePe status is still valid
+      console.error("Failed to persist payment status in DB:", dbError.message);
+    }
+
     res.json({
       success: true,
       data: {
@@ -74,5 +116,62 @@ export const checkPaymentStatus = async (req, res) => {
       message: "Status check failed",
       error: error?.response?.data || error.message,
     });
+  }
+};
+
+/**
+ * PhonePe Webhook/Callback handler
+ * Called by PhonePe server-to-server when payment status changes.
+ * This ensures payment status is persisted even if the user closes the browser.
+ */
+export const handlePaymentWebhook = async (req, res) => {
+  try {
+    console.log("PhonePe Webhook received:", JSON.stringify(req.body, null, 2));
+
+    const { merchantOrderId, state, transactionId } = req.body || {};
+
+    if (!merchantOrderId) {
+      console.warn("Webhook: missing merchantOrderId");
+      return res.status(400).json({ success: false, message: "Missing merchantOrderId" });
+    }
+
+    let paymentStatus = "failed";
+    if (state === "COMPLETED") {
+      paymentStatus = "success";
+    } else if (state === "PENDING") {
+      paymentStatus = "pending";
+    }
+
+    const updateFields = { "payment.status": paymentStatus };
+    if (transactionId) {
+      updateFields["payment.txnId"] = transactionId;
+    }
+
+    // State machine: link payment outcome to order status
+    if (paymentStatus === "success") {
+      updateFields["status"] = "accepted"; // Payment confirmed → order accepted
+    } else if (paymentStatus === "failed") {
+      updateFields["status"] = "cancelled"; // Payment failed → order cancelled
+    }
+    // "pending" payment → keep order.status as-is
+
+    const updatedOrder = await Order.findByIdAndUpdate(
+      merchantOrderId,
+      { $set: updateFields },
+      { new: true }
+    );
+
+    if (updatedOrder) {
+      console.log(`Webhook: Order ${merchantOrderId} updated — payment: ${paymentStatus}, order status: ${updatedOrder.status}`);
+    } else {
+      console.warn(`Webhook: Order ${merchantOrderId} not found in DB`);
+    }
+
+    // PhonePe expects a 200 response to acknowledge receipt
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("Webhook processing error:", error.message);
+    // Still return 200 to prevent PhonePe from retrying indefinitely
+    res.status(200).json({ success: false, message: "Webhook processing error" });
   }
 };
