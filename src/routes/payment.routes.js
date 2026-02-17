@@ -1,10 +1,14 @@
-import { Router } from 'express';
-import { protect } from '../middlewares/auth.js';
-import { initiatePayment } from '../controllers/payment.controller.js';
+import { Router } from "express";
+import {
+  initiatePayment,
+  checkPaymentStatus,
+  handlePaymentWebhook,
+} from "../controllers/payment.controller.js";
 
 const router = Router();
 
-// POST /api/payment/initiate
-router.post('/initiate', protect, initiatePayment);
+router.post("/initiate", initiatePayment);
+router.get("/status/:transactionId", checkPaymentStatus);
+router.post("/webhook", handlePaymentWebhook);
 
 export default router;
