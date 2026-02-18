@@ -61,6 +61,15 @@ const orderSchema = new mongoose.Schema({
     status: { type: String, default: 'init' }
   },
 
+  // Delivery tracking (separate from order.status)
+  deliveryStatus: {
+    type: String,
+    enum: ['pending', 'shipped', 'out_for_delivery', 'delivered'],
+    default: 'pending',
+    index: true
+  },
+  deliveredAt: { type: Date, default: null },
+
   // Inventory tracking flag to prevent double deduction
   stockDeducted: { type: Boolean, default: false }
 }, { timestamps: true });

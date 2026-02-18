@@ -102,6 +102,10 @@ if (process.env.FEATURE_ADMIN_USERS === "true") {
 import adminReturnRoutes from "./admin.return.routes.js";
 router.use("/admin/returns", adminReturnRoutes);
 
+// ⭐ Admin Delivery Management API
+import adminDeliveryRoutes from "./admin.delivery.routes.js";
+router.use("/admin/delivery", adminDeliveryRoutes);
+
 // Main User Routes
 router.use("/users", userRoutes);
 router.use("/products", productRoutes);
