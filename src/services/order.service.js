@@ -18,38 +18,38 @@ async function validateAndApplyCoupon(couponCode, items) {
       .populate('applicableProducts')
       .populate('applicableCategories')
       .populate('applicableBrands');
-    
+
     if (!coupon) {
       return { valid: false, discountAmount: 0, error: 'Invalid coupon code' };
     }
-    
+
     // Validate coupon
     if (!coupon.active) {
       return { valid: false, discountAmount: 0, error: 'Coupon is not active' };
     }
-    
+
     if (coupon.isExpired()) {
       return { valid: false, discountAmount: 0, error: 'Coupon has expired' };
     }
-    
+
     if (!coupon.hasStarted()) {
       return { valid: false, discountAmount: 0, error: 'Coupon is not yet active' };
     }
-    
+
     if (coupon.isUsageLimitExceeded()) {
       return { valid: false, discountAmount: 0, error: 'Coupon usage limit exceeded' };
     }
-    
+
     // Calculate applicable total
     let applicableTotal = 0;
     const applicableProductIds = coupon.applicableProducts.map(p => p._id.toString());
     const applicableCategoryIds = coupon.applicableCategories.map(c => c._id.toString());
     const applicableBrandIds = coupon.applicableBrands.map(b => b._id.toString());
-    
-    const isGlobal = applicableProductIds.length === 0 && 
-                     applicableCategoryIds.length === 0 && 
-                     applicableBrandIds.length === 0;
-    
+
+    const isGlobal = applicableProductIds.length === 0 &&
+      applicableCategoryIds.length === 0 &&
+      applicableBrandIds.length === 0;
+
     if (isGlobal) {
       // Apply to all items
       applicableTotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -59,17 +59,17 @@ async function validateAndApplyCoupon(couponCode, items) {
         const matchesProduct = applicableProductIds.includes(item.productId);
         const matchesCategory = item.product?.category && applicableCategoryIds.includes(item.product.category.toString());
         const matchesBrand = item.product?.brand && applicableBrandIds.includes(item.product.brand.toString());
-        
+
         if (matchesProduct || matchesCategory || matchesBrand) {
           applicableTotal += item.price * item.quantity;
         }
       }
     }
-    
+
     if (applicableTotal === 0) {
       return { valid: false, discountAmount: 0, error: 'Coupon not applicable to cart items' };
     }
-    
+
     // Calculate discount
     let discountAmount = 0;
     if (coupon.type === 'percentage') {
@@ -77,9 +77,9 @@ async function validateAndApplyCoupon(couponCode, items) {
     } else if (coupon.type === 'flat') {
       discountAmount = Math.min(coupon.value, applicableTotal);
     }
-    
+
     discountAmount = Math.round(discountAmount * 100) / 100;
-    
+
     return { valid: true, discountAmount, coupon };
   } catch (error) {
     console.error('Error validating coupon:', error);
@@ -104,14 +104,14 @@ export const createOrder = async ({ userId, items, address, paymentMethod = 'COD
   // Fetch product data from database
   const productIds = items.map(i => i.productId);
   const products = await Product.find({ _id: { $in: productIds }, isActive: true });
-  
+
   if (products.length !== productIds.length) {
     throw createError(400, 'One or more products not found or inactive');
   }
 
   // Create a map for quick product lookup
   const productMap = new Map(products.map(p => [p._id.toString(), p]));
-  
+
   // Compute subtotals and create order items with product snapshots
   let totalPrice = 0;
   const orderItems = items.map(item => {
@@ -119,16 +119,16 @@ export const createOrder = async ({ userId, items, address, paymentMethod = 'COD
     if (!product) {
       throw createError(400, `Product ${item.productId} not found`);
     }
-    
+
     // Validate stock availability
     if (product.stock < item.quantity) {
       throw createError(400, `Insufficient stock for ${product.title}. Available: ${product.stock}`);
     }
-    
+
     // Compute subtotal (server-side only)
     const subtotal = product.price * item.quantity;
     totalPrice += subtotal;
-    
+
     // Return order item with product snapshot
     return {
       product: product._id,
@@ -139,15 +139,14 @@ export const createOrder = async ({ userId, items, address, paymentMethod = 'COD
     };
   });
 
-  // Calculate shipping and tax
-  const shipping = totalPrice > 999 ? 0 : 49;
+  // Calculate tax (no shipping charges)
   const tax = Math.round(totalPrice * 0.18); // 18% GST
-  const originalTotal = totalPrice + shipping + tax;
-  
+  const originalTotal = totalPrice + tax;
+
   // Validate and apply coupon if provided
   let discountAmount = 0;
   let appliedCouponId = null;
-  
+
   if (couponCode) {
     const couponValidation = await validateAndApplyCoupon(couponCode, items.map((item, idx) => ({
       productId: item.productId,
@@ -155,18 +154,18 @@ export const createOrder = async ({ userId, items, address, paymentMethod = 'COD
       price: orderItems[idx].price,
       product: productMap.get(item.productId)
     })));
-    
+
     if (!couponValidation.valid) {
       throw createError(400, couponValidation.error || 'Invalid coupon');
     }
-    
+
     discountAmount = couponValidation.discountAmount;
     appliedCouponId = couponValidation.coupon._id;
-    
+
     // Increment coupon usage
     await Coupon.findByIdAndUpdate(appliedCouponId, { $inc: { usedCount: 1 } });
   }
-  
+
   const finalTotal = originalTotal - discountAmount;
 
   // Create the order
@@ -174,9 +173,11 @@ export const createOrder = async ({ userId, items, address, paymentMethod = 'COD
     user: userId,
     items: orderItems,
     subtotal: totalPrice,
-    shipping,
+    shipping: 0,  // No shipping charges (kept for backward compat)
     tax,
+    taxAmount: tax,           // Authoritative GST field (same as tax)
     total: finalTotal,
+    totalAmount: finalTotal,  // Authoritative total field (same as finalTotal)
     originalTotal,
     discountAmount,
     couponCode: couponCode ? couponCode.toUpperCase().trim() : null,
@@ -209,7 +210,7 @@ export const create = async ({ userId, items, shippingAddress }) => {
     productId: i.product,
     quantity: i.qty
   }));
-  
+
   return createOrder({
     userId,
     items: mappedItems,
