@@ -3,7 +3,7 @@ import Order from "../models/Order.js";
 
 export const initiatePayment = async (req, res) => {
   try {
-    const { orderId, amount } = req.body;
+    const { orderId } = req.body;
 
     if (!orderId) {
       return res.status(400).json({
@@ -11,10 +11,22 @@ export const initiatePayment = async (req, res) => {
         message: "Order ID is required",
       });
     }
-    if (!amount) {
+
+    // SECURITY: Always re-fetch order from DB — never trust frontend amount
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Use authoritative amount from DB (totalAmount > finalTotal > total)
+    const amount = order.totalAmount || order.finalTotal || order.total;
+    if (!amount || amount <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Amount is required",
+        message: "Invalid order amount",
       });
     }
 

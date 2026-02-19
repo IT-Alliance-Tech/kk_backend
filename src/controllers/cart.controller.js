@@ -53,15 +53,22 @@ export const getCart = async (req, res, next) => {
           items: [],
           total: 0
         },
+        taxSummary: { subtotal: 0, taxAmount: 0, totalAmount: 0 },
         message: 'Cart is empty'
       });
     }
+
+    // Compute tax summary inline (no extra DB query, no shipping)
+    const subtotal = cart.total; // pre-save hook already computes sum(price*qty)
+    const taxAmount = Math.round(subtotal * 0.18);
+    const totalAmount = subtotal + taxAmount;
 
     return res.status(200).json({
       statusCode: 200,
       success: true,
       error: null,
       data: cart,
+      taxSummary: { subtotal, taxAmount, totalAmount },
       message: 'Cart retrieved successfully'
     });
   } catch (error) {
@@ -141,7 +148,7 @@ export const addToCart = async (req, res, next) => {
       stock = variant.stock;
       variantName = variant.name;
       effectiveVariantId = variant._id;
-      
+
       // Use variant images if available, else fallback to product images
       if (variant.images && variant.images.length > 0) {
         firstImage = variant.images[0];
@@ -175,7 +182,7 @@ export const addToCart = async (req, res, next) => {
     if (existingItem) {
       // Item exists - update quantity
       const newQty = existingItem.qty + qty;
-      
+
       // Check if new quantity exceeds stock
       if (newQty > stock) {
         return next(createError(400, `Cannot add ${qty} more. Only ${stock} items available in stock`));
@@ -280,7 +287,7 @@ export const updateCartItem = async (req, res, next) => {
     } else {
       // Update quantity and verify stock
       let stock;
-      
+
       if (effectiveVariantId) {
         const variant = await ProductVariant.findById(effectiveVariantId);
         if (variant) {
@@ -407,7 +414,7 @@ export const clearCart = async (req, res, next) => {
 
     // Find user's cart
     const cart = await Cart.findOne({ userId });
-    
+
     if (!cart) {
       // No cart exists, return empty cart response
       return res.status(200).json({
@@ -424,7 +431,7 @@ export const clearCart = async (req, res, next) => {
 
     // Clear all items
     cart.items = [];
-    
+
     // Save cart (pre-save hook will set total to 0)
     await cart.save();
 
