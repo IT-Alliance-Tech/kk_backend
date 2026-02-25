@@ -1,220 +1,107 @@
-import { z } from 'zod';
+/**
+ * Return Controller (Item-Level)
+ * Handles return requests inline on Order items.
+ * No separate ReturnRequest collection.
+ * No refund logic.
+ */
+
 import mongoose from 'mongoose';
-import ReturnRequest from '../models/ReturnRequest.js';
 import Order from '../models/Order.js';
 import createError from 'http-errors';
-import {
-  validateStatusTransition,
-  createStatusHistoryEntry,
-  getAllowedNextStatuses
-} from '../utils/returnStatusTransitions.js';
+
+// Forward-only status order
+const RETURN_STATUSES = ['none', 'requested', 'initiated', 'in_process', 'completed'];
 
 /**
- * Validation schema for creating a return request
+ * POST /api/returns/request
+ * Body: { orderId, itemId, qty }
  */
-const createReturnSchema = z.object({
-  body: z.object({
-    orderId: z.string().min(1, 'Order ID is required'),
-    productId: z.string().min(1, 'Product ID is required'),
-    actionType: z.enum(['return', 'return_refund'], {
-      errorMap: () => ({ message: 'Action type must be "return" or "return_refund"' })
-    }),
-    issueType: z.enum(['damaged', 'wrong-item', 'quality-issue', 'late-delivery', 'others'], {
-      errorMap: () => ({ message: 'Invalid issue type' })
-    }),
-    issueDescription: z.string().optional()
-  }).refine(
-    // If issueType is 'others', issueDescription is required
-    (data) => {
-      if (data.issueType === 'others') {
-        return data.issueDescription && data.issueDescription.trim().length > 0;
-      }
-      return true;
-    },
-    {
-      message: 'Issue description is required when issue type is "others"',
-      path: ['issueDescription']
-    }
-  )
-});
-
-/**
- * Create a new return request
- * POST /api/returns
- */
-export const createReturnRequest = async (req, res, next) => {
+export const requestReturn = async (req, res, next) => {
   try {
-    const { orderId, productId, actionType, issueType, issueDescription, isDemo } = req.body;
+    const { orderId, itemId, qty } = req.body;
     const userId = req.user.id;
 
-    // Skip validation for demo requests
-    if (!isDemo) {
-      // Verify the order exists and belongs to the user
-      const order = await Order.findOne({ _id: orderId, user: userId });
-      if (!order) {
-        return next(createError(404, 'Order not found or does not belong to you'));
-      }
-
-      // Verify the product exists in the order
-      const orderItem = order.items.find(item => item.product.toString() === productId);
-      if (!orderItem) {
-        return next(createError(400, 'Product not found in this order'));
-      }
-
-      // Check if a return request already exists for this order + product
-      const existingReturn = await ReturnRequest.findOne({ orderId, productId });
-      if (existingReturn) {
-        return next(createError(409, 'A return request already exists for this product'));
-      }
+    // Basic validation
+    if (!orderId || !itemId || !qty) {
+      return next(createError(400, 'orderId, itemId, and qty are required'));
+    }
+    if (!mongoose.Types.ObjectId.isValid(orderId) || !mongoose.Types.ObjectId.isValid(itemId)) {
+      return next(createError(400, 'Invalid orderId or itemId'));
+    }
+    if (!Number.isInteger(qty) || qty <= 0) {
+      return next(createError(400, 'qty must be a positive integer'));
     }
 
-    // Create the return request
-    // For demo mode, bypass Mongoose validation by using insertMany with rawResult
-    let returnRequest;
-    if (isDemo) {
-      // Demo mode: Store as plain strings without ObjectId casting
-      const initialStatus = 'return_requested';
-      const demoReturn = {
-        userId,
-        orderId,
-        productId,
-        actionType,
-        issueType,
-        issueDescription: issueType === 'others' ? issueDescription : null,
-        status: initialStatus,
-        statusHistory: [{
-          status: initialStatus,
-          updatedBy: 'system',
-          timestamp: new Date(),
-          notes: 'Return request created (demo mode)'
-        }],
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-      
-      // Use collection.insertOne to bypass Mongoose schema validation
-      const result = await ReturnRequest.collection.insertOne(demoReturn);
-      returnRequest = { _id: result.insertedId, ...demoReturn };
-    } else {
-      // Production mode: Use normal Mongoose create with validation
-      const initialStatus = 'return_requested';
-      returnRequest = await ReturnRequest.create({
-        userId,
-        orderId,
-        productId,
-        actionType,
-        issueType,
-        issueDescription: issueType === 'others' ? issueDescription : null,
-        status: initialStatus,
-        statusHistory: [createStatusHistoryEntry(initialStatus, 'system', userId, 'Return request created')]
-      });
+    // Fetch order (lean for read, we'll use findOneAndUpdate for write)
+    const order = await Order.findOne({ _id: orderId, user: userId })
+      .select('items payment deliveryStatus deliveredAt')
+      .lean();
 
-      // Populate product and order details for real requests
-      await returnRequest.populate('productId', 'name price image');
-    }
-
-    return res.status(201).json({
-      statusCode: 201,
-      success: true,
-      error: null,
-      data: returnRequest
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Get all return requests for the logged-in user
- * GET /api/returns/my
- * Supports pagination: ?page=1&limit=10
- */
-export const getMyReturnRequests = async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    // Get total count for pagination
-    const total = await ReturnRequest.countDocuments({ userId });
-
-    // Get paginated return requests
-    // Use lean() to get plain objects, then conditionally populate based on ObjectId validity
-    const returnRequests = await ReturnRequest.find({ userId })
-      .lean()
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
-
-    // Attempt to populate for valid ObjectIds only (skip for demo records)
-    for (const request of returnRequests) {
-      // Check if productId is a valid ObjectId before populating
-      if (mongoose.Types.ObjectId.isValid(request.productId)) {
-        try {
-          const product = await mongoose.model('Product').findById(request.productId).select('name price image').lean();
-          if (product) request.product = product;
-        } catch (err) {
-          // Silently skip if populate fails
-        }
-      }
-      
-      // Check if orderId is a valid ObjectId before populating
-      if (mongoose.Types.ObjectId.isValid(request.orderId)) {
-        try {
-          const order = await mongoose.model('Order').findById(request.orderId).select('createdAt status total').lean();
-          if (order) request.order = order;
-        } catch (err) {
-          // Silently skip if populate fails
-        }
-      }
-    }
-
-    return res.status(200).json({
-      statusCode: 200,
-      success: true,
-      error: null,
-      data: {
-        returnRequests,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Get return request status for a specific order
- * GET /api/returns/order/:orderId
- * Returns all return requests for products in this order
- */
-export const getReturnRequestsByOrder = async (req, res, next) => {
-  try {
-    const { orderId } = req.params;
-    const userId = req.user.id;
-
-    // Verify the order exists and belongs to the user
-    const order = await Order.findOne({ _id: orderId, user: userId });
     if (!order) {
       return next(createError(404, 'Order not found or does not belong to you'));
     }
 
-    // Get all return requests for this order
-    const returnRequests = await ReturnRequest.find({ orderId })
-      .populate('productId', 'name price image')
-      .sort({ createdAt: -1 });
+    // Payment must be successful
+    if (order.payment?.status !== 'success') {
+      return next(createError(400, 'Returns are only allowed for successfully paid orders'));
+    }
+
+    // Must be delivered
+    if (order.deliveryStatus !== 'delivered') {
+      return next(createError(400, 'Returns are only allowed for delivered orders'));
+    }
+
+    // 5-day window check
+    if (!order.deliveredAt) {
+      return next(createError(400, 'Delivery date not recorded'));
+    }
+    const daysSinceDelivery = (Date.now() - new Date(order.deliveredAt).getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceDelivery > 5) {
+      return next(createError(400, 'Return window closed (5 days exceeded)'));
+    }
+
+    // Find item by _id
+    const item = order.items.find(i => i._id && i._id.toString() === itemId);
+    if (!item) {
+      return next(createError(400, 'Item not found in this order'));
+    }
+
+    // Qty check
+    const maxReturnable = item.qty - (item.returnRequestedQty || 0);
+    if (qty > maxReturnable) {
+      return next(createError(400, `Cannot return ${qty} items. Maximum returnable: ${maxReturnable}`));
+    }
+
+    // Update inline using positional operator
+    const newReturnQty = (item.returnRequestedQty || 0) + qty;
+    const updated = await Order.findOneAndUpdate(
+      { _id: orderId, 'items._id': itemId },
+      {
+        $set: {
+          'items.$.returnRequestedQty': newReturnQty,
+          'items.$.returnStatus': 'requested',
+          'items.$.returnRequestedAt': new Date()
+        }
+      },
+      { new: true, runValidators: true }
+    ).select('items').lean();
+
+    if (!updated) {
+      return next(createError(500, 'Failed to update return request'));
+    }
+
+    const updatedItem = updated.items.find(i => i._id && i._id.toString() === itemId);
 
     return res.status(200).json({
       statusCode: 200,
       success: true,
       error: null,
-      data: returnRequests
+      data: {
+        orderId,
+        itemId,
+        returnRequestedQty: updatedItem?.returnRequestedQty || newReturnQty,
+        returnStatus: updatedItem?.returnStatus || 'requested'
+      }
     });
   } catch (error) {
     next(error);
@@ -222,120 +109,77 @@ export const getReturnRequestsByOrder = async (req, res, next) => {
 };
 
 /**
- * Update return request status (Admin only)
- * PATCH /api/returns/:id/status
- */
-export const updateReturnRequestStatus = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { status, adminNotes, refundAmount } = req.body;
-    
-    // Get admin ID from request (set by requireAdmin middleware)
-    const adminId = req.user?.id || req.admin?.id;
-
-    if (!status) {
-      return next(createError(400, 'Status is required'));
-    }
-
-    // Find the return request
-    const returnRequest = await ReturnRequest.findById(id);
-    if (!returnRequest) {
-      return next(createError(404, 'Return request not found'));
-    }
-
-    // Validate status transition
-    const validation = validateStatusTransition(
-      returnRequest.status,
-      status,
-      returnRequest.actionType
-    );
-
-    if (!validation.valid) {
-      return next(createError(400, validation.error));
-    }
-
-    // Update the status and add to history
-    returnRequest.status = status;
-    
-    // Add status history entry
-    const historyEntry = createStatusHistoryEntry(
-      status,
-      'admin',
-      adminId,
-      adminNotes || `Status updated to ${status}`
-    );
-    returnRequest.statusHistory.push(historyEntry);
-
-    // Update optional fields
-    if (adminNotes) {
-      returnRequest.adminNotes = adminNotes;
-    }
-    if (refundAmount !== undefined && refundAmount !== null) {
-      returnRequest.refundAmount = refundAmount;
-    }
-
-    await returnRequest.save();
-    
-    // Populate for response
-    await returnRequest.populate('productId', 'name price image');
-
-    return res.status(200).json({
-      statusCode: 200,
-      success: true,
-      error: null,
-      data: returnRequest
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Get all return requests (Admin only)
  * GET /api/admin/returns
- * Supports filtering and pagination: ?status=return_requested&page=1&limit=20
+ * Query: page, limit, returnStatus
+ * Paginated at item level using aggregation
  */
-export const getAllReturnRequests = async (req, res, next) => {
+export const adminListReturns = async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    
-    // Build filter query
-    const filter = {};
-    if (req.query.status) {
-      filter.status = req.query.status;
-    }
-    if (req.query.actionType) {
-      filter.actionType = req.query.actionType;
-    }
 
-    // Get total count for pagination
-    const total = await ReturnRequest.countDocuments(filter);
+    // Optional status filter
+    const statusFilter = req.query.returnStatus;
+    // After $unwind, `items` is a single object so plain dot notation works
+    const itemMatch = statusFilter && RETURN_STATUSES.includes(statusFilter)
+      ? { 'items.returnStatus': statusFilter }
+      : { 'items.returnStatus': { $exists: true, $nin: ['none', null] } };
 
-    // Get paginated return requests with populated fields
-    const returnRequests = await ReturnRequest.find(filter)
-      .populate('userId', 'name email')
-      .populate('productId', 'name price image')
-      .populate('orderId', 'createdAt status total')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    const pipeline = [
+      // 1. Pre-filter: orders with at least one item that has a real return status.
+      //    Use $elemMatch so the check applies per-element (plain $nin on array
+      //    dot-notation excludes documents where ANY element is in the list).
+      { $match: { items: { $elemMatch: { returnStatus: { $exists: true, $nin: ['none', null] } } } } },
+      // 2. Unwind items
+      { $unwind: '$items' },
+      // 3. Match individual items with returns
+      { $match: itemMatch },
+      // 4. Sort by return request date
+      { $sort: { 'items.returnRequestedAt': -1 } },
+      // 5. Facet for count + paginated data
+      {
+        $facet: {
+          metadata: [{ $count: 'total' }],
+          data: [
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $project: {
+                orderId: '$_id',
+                itemId: '$items._id',
+                productId: '$items.product',
+                productTitle: '$items.title',
+                productImage: '$items.image',
+                qtyOrdered: '$items.qty',
+                returnRequestedQty: '$items.returnRequestedQty',
+                returnStatus: '$items.returnStatus',
+                returnRequestedAt: '$items.returnRequestedAt',
+                customerName: '$shippingAddress.name',
+                customerPhone: '$shippingAddress.phone',
+                shippingAddress: '$shippingAddress',
+                createdAt: 1
+              }
+            }
+          ]
+        }
+      }
+    ];
+
+    const [result] = await Order.aggregate(pipeline);
+
+    const total = result.metadata[0]?.total || 0;
+    const returns = result.data || [];
+    const totalPages = Math.ceil(total / limit);
 
     return res.status(200).json({
       statusCode: 200,
       success: true,
       error: null,
-      data: {
-        returnRequests,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      }
+      data: returns,
+      page,
+      totalPages,
+      totalCount: total
     });
   } catch (error) {
     next(error);
@@ -343,39 +187,111 @@ export const getAllReturnRequests = async (req, res, next) => {
 };
 
 /**
- * Get allowed next statuses for a return request (Admin only)
- * GET /api/admin/returns/:id/allowed-statuses
+ * PATCH /api/admin/returns/:orderId/:itemId
+ * Body: { returnStatus: "initiated" | "in_process" | "completed" }
+ * Forward-only transitions only.
  */
-export const getAllowedStatuses = async (req, res, next) => {
+export const adminUpdateReturnStatus = async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const { orderId, itemId } = req.params;
+    const { returnStatus } = req.body;
 
-    const returnRequest = await ReturnRequest.findById(id);
-    if (!returnRequest) {
-      return next(createError(404, 'Return request not found'));
+    // Validate IDs
+    if (!mongoose.Types.ObjectId.isValid(orderId) || !mongoose.Types.ObjectId.isValid(itemId)) {
+      return res.status(400).json({
+        statusCode: 400,
+        success: false,
+        error: { message: 'Invalid orderId or itemId' },
+        data: null
+      });
     }
 
-    const allowedStatuses = getAllowedNextStatuses(
-      returnRequest.status,
-      returnRequest.actionType
-    );
+    // Validate status value
+    if (!returnStatus || !RETURN_STATUSES.includes(returnStatus)) {
+      return res.status(400).json({
+        statusCode: 400,
+        success: false,
+        error: { message: `Invalid returnStatus. Must be one of: ${RETURN_STATUSES.join(', ')}` },
+        data: null
+      });
+    }
+
+    // Fetch order to check current status
+    const order = await Order.findById(orderId).select('items').lean();
+    if (!order) {
+      return res.status(404).json({
+        statusCode: 404,
+        success: false,
+        error: { message: 'Order not found' },
+        data: null
+      });
+    }
+
+    const item = order.items.find(i => i._id.toString() === itemId);
+    if (!item) {
+      return res.status(404).json({
+        statusCode: 404,
+        success: false,
+        error: { message: 'Item not found in this order' },
+        data: null
+      });
+    }
+
+    // Forward-only enforcement
+    const currentIdx = RETURN_STATUSES.indexOf(item.returnStatus || 'none');
+    const newIdx = RETURN_STATUSES.indexOf(returnStatus);
+
+    if (newIdx <= currentIdx) {
+      return res.status(400).json({
+        statusCode: 400,
+        success: false,
+        error: {
+          message: `Cannot transition from "${item.returnStatus || 'none'}" to "${returnStatus}". Only forward transitions are allowed.`
+        },
+        data: null
+      });
+    }
+
+    // Cannot modify if already completed
+    if (item.returnStatus === 'completed') {
+      return res.status(400).json({
+        statusCode: 400,
+        success: false,
+        error: { message: 'Cannot modify a completed return' },
+        data: null
+      });
+    }
+
+    // Update
+    const updated = await Order.findOneAndUpdate(
+      { _id: orderId, 'items._id': itemId },
+      { $set: { 'items.$.returnStatus': returnStatus } },
+      { new: true, runValidators: true }
+    ).select('items').lean();
+
+    if (!updated) {
+      return res.status(500).json({
+        statusCode: 500,
+        success: false,
+        error: { message: 'Failed to update return status' },
+        data: null
+      });
+    }
+
+    const updatedItem = updated.items.find(i => i._id.toString() === itemId);
 
     return res.status(200).json({
       statusCode: 200,
       success: true,
       error: null,
       data: {
-        currentStatus: returnRequest.status,
-        actionType: returnRequest.actionType,
-        allowedNextStatuses: allowedStatuses
+        orderId,
+        itemId,
+        returnStatus: updatedItem?.returnStatus,
+        returnRequestedQty: updatedItem?.returnRequestedQty
       }
     });
   } catch (error) {
     next(error);
   }
-};
-
-// Export validators for use in routes
-export const validators = {
-  createReturnSchema
 };
