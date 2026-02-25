@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-const orderItem = new mongoose.Schema({
+const orderItemSchema = new mongoose.Schema({
   product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   title: String,
   price: Number,
@@ -8,12 +8,21 @@ const orderItem = new mongoose.Schema({
   image: String,
   // Variant support (optional)
   variantId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductVariant', default: null },
-  variantName: { type: String, default: null }
-}, { _id: false });
+  variantName: { type: String, default: null },
+  // Return tracking (inline, no separate collection)
+  returnRequestedQty: { type: Number, default: 0 },
+  returnStatus: {
+    type: String,
+    enum: ['none', 'requested', 'initiated', 'in_process', 'completed'],
+    default: 'none'
+  },
+  returnRequestedAt: { type: Date, default: null }
+});
+// _id: true (default) — each item has unique _id for item-level targeting
 
 const orderSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  items: [orderItem],
+  items: [orderItemSchema],
   subtotal: Number,
   shipping: Number,
   tax: Number,
@@ -29,7 +38,6 @@ const orderSchema = new mongoose.Schema({
   finalTotal: Number, // Total after discount (same as total if no coupon)
 
   // Root-level order status
-  // Note: 'replace' removed - return/refund logic handled via separate ReturnRequest model
   status: {
     type: String,
     enum: [
