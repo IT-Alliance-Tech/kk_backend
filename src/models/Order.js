@@ -84,4 +84,11 @@ const orderSchema = new mongoose.Schema({
   stockDeducted: { type: Boolean, default: false }
 }, { timestamps: true });
 
+// ── Indexes for analytics queries ─────────────────────────────────────────────
+// Dashboard revenue aggregation: match on status, sort by createdAt
+orderSchema.index({ status: 1 });
+orderSchema.index({ createdAt: -1 });
+// Compound: status filter + createdAt sort in one scan
+orderSchema.index({ status: 1, createdAt: -1 });
+
 export default mongoose.model('Order', orderSchema);

@@ -2,15 +2,21 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
-const MONGO = process.env.MONGO_URL || process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/kitchen-kettles';
+const MONGO = process.env.MONGO_URI;
+
+if (!MONGO) {
+  console.error('MONGO_URI not set in environment.');
+  process.exit(1);
+}
 
 const AdminSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-  password: { type: String, required: true },
+  passwordHash: { type: String, required: true },
   role: { type: String, default: 'admin' },
+  isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
-});
+}, { collection: 'users' });
 
 const Admin = mongoose.models.Admin || mongoose.model('Admin', AdminSchema);
 
@@ -21,7 +27,7 @@ async function run() {
   const rawPassword = args[2] || 'admin123';
 
   try {
-    await mongoose.connect(MONGO, { useNewUrlParser: true, useUnifiedTopology: true });
+    await mongoose.connect(MONGO);
     console.log('Connected to MongoDB');
 
     const existing = await Admin.findOne({ email });
@@ -31,7 +37,7 @@ async function run() {
     }
 
     const hashed = await bcrypt.hash(rawPassword, 10);
-    const admin = new Admin({ name, email, password: hashed, role: 'admin' });
+    const admin = new Admin({ name, email, passwordHash: hashed, role: 'admin' });
     await admin.save();
     console.log('Admin created:', admin.email);
     process.exit(0);
