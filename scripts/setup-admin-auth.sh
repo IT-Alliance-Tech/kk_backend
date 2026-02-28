@@ -20,23 +20,23 @@ if [ ! -f ".env" ]; then
     echo "⚠️  Warning: .env file not found"
     echo "   Creating .env file with defaults..."
     cat > .env << 'EOF'
-# MongoDB Connection
-MONGO_URI=mongodb://localhost:27017/kitchen-kettles
+# MongoDB Connection (REQUIRED)
+MONGO_URI=
 
-# JWT Configuration
-JWT_SECRET=dev-secret-change-in-production-12345
+# JWT Configuration (REQUIRED, use a strong secret in production)
+JWT_SECRET=
 JWT_EXPIRES_IN=1d
 
 # Server
 PORT=5001
 
-# Admin Credentials (for seeding)
-ADMIN_EMAIL=admin@kitchenkettles.local
-ADMIN_PW=Admin@1234
-ADMIN_NAME=Admin User
+# Admin Credentials (for seeding, change before production)
+ADMIN_EMAIL=
+ADMIN_PW=
+ADMIN_NAME=
 EOF
-    echo "   ✅ Created .env with default values"
-    echo "   ⚠️  Remember to update JWT_SECRET in production!"
+    echo "   ✅ Created .env template (please fill in all required values)"
+    echo "   ⚠️  Do NOT use dev/test credentials in production!"
     echo ""
 fi
 
