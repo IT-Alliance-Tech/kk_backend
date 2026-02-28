@@ -35,6 +35,10 @@ import adminProductRoutes from "./adminProductRoutes.js";
 import adminProductVariantRoutes from "./adminProductVariant.routes.js";
 import searchRoutes from "./search.routes.js";
 
+// ⭐ Admin Dashboard Analytics
+import { getDashboardAnalytics } from "../controllers/admin.dashboard.controller.js";
+import { requireAuth, requireAdmin } from "../middlewares/auth.js";
+
 // ALIASES (leave them untouched)
 import authAliases from "./aliases.auth.js";
 import brandAliases from "./aliases.brand.js";
@@ -73,6 +77,9 @@ router.use("/admin/homepage", adminHomepageRoutes);
 
 // ⭐ Admin Hero Images Management API
 router.use("/admin/hero-images", adminHeroRoutes);
+
+// ⭐ Admin Dashboard Analytics
+router.get("/admin/dashboard", requireAuth, requireAdmin, getDashboardAnalytics);
 
 if (process.env.FEATURE_ADMIN_ORDERS === "true") {
   (async () => {
