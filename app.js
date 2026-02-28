@@ -16,12 +16,10 @@ const app = express();
 ================================ */
 const allowedOrigins = [
   "http://localhost:3000",
-  "https://kkfrontend.vercel.app",
-  "https://kk-frontend-seven.vercel.app",
-  "https://kkfrontend-ib2c4p1ap-it-alliance-techs-projects.vercel.app",
-  "https://kkfrontend-git-develop-it-alliance-techs-projects.vercel.app",
-  "https://kkfrontend-7mtclf1zt-it-alliance-techs-projects.vercel.app",
-  "https://kkfrontend-yltna53wg-it-alliance-techs-projects.vercel.app",
+  ...(process.env.APP_URL ? [process.env.APP_URL] : []),
+  ...(process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
+    : []),
 ];
 
 app.use(

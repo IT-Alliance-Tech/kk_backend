@@ -4,7 +4,12 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const Admin = require('../src/models/Admin');
 
-const MONGO = process.env.MONGO_URL || process.env.MONGODB_URI || 'mongodb://localhost:27017/kitchen-kettles';
+const MONGO = process.env.MONGO_URI;
+
+if (!MONGO) {
+  console.error('MONGO_URI not set in environment.');
+  process.exit(1);
+}
 
 async function run() {
   const args = process.argv.slice(2);
