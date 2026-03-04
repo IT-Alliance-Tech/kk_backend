@@ -8,11 +8,7 @@ import Category from '../models/Category.js';
 import Product from '../models/Product.js';
 import HomepageSettings from '../models/HomepageSettings.js';
 
-/**
- * GET /api/admin/homepage/brands
- * Returns all brands with homepage configuration fields
- * Sorted by homepageOrder (items with order appear first)
- */
+
 export const getHomepageBrands = async (req, res) => {
   try {
     const brands = await Brand

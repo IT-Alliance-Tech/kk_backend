@@ -16,7 +16,23 @@ const signTokens = (userId, role) => {
   return { access, refresh };
 };
 
-export const requestOtp = async (email, purpose='login') => {
+export const requestOtp = async (email, purpose = 'login') => {
+  // ── Existence guard: enforce login vs signup intent ──────────────────────
+  if (purpose === 'login') {
+    // User MUST already exist to receive a login OTP
+    const user = await User.findOne({ email });
+    if (!user) {
+      throw createError(404, 'User not registered');
+    }
+  } else if (purpose === 'signup') {
+    // User must NOT exist yet — prevent duplicate registrations
+    const user = await User.findOne({ email });
+    if (user) {
+      throw createError(409, 'User already registered. Please login.');
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   // 🔧 DEV-ONLY: Mock OTP for testing (skip email sending)
   if (process.env.FORCE_MOCK_OTP === 'true') {
     const mockOtp = '123456';
@@ -31,10 +47,10 @@ export const requestOtp = async (email, purpose='login') => {
   }
 
   const code = generateOTP(6);
-  
+
   // Hash OTP with bcrypt before storing (NEVER store plain text OTP)
   const otpHash = await hashOTP(code);
-  
+
   const otp = await OtpToken.create({
     email,
     purpose,
@@ -62,12 +78,12 @@ export const requestOtp = async (email, purpose='login') => {
   return { ok: true, message: 'OTP sent successfully' };
 };
 
-export const verifyOtp = async ({ email, code, purpose='login', name }) => {
+export const verifyOtp = async ({ email, code, purpose = 'login', name }) => {
   const record = await OtpToken.findOne({ email, purpose, consumed: false }).sort({ createdAt: -1 });
-  
+
   if (!record) throw createError(400, 'OTP not found or already used');
   if (new Date() > record.expiresAt) throw createError(400, 'OTP expired');
-  
+
   // Compare OTP using bcrypt
   const isValid = await compareOTP(code, record.otpHash);
   if (!isValid) throw createError(400, 'Invalid OTP');
@@ -76,10 +92,17 @@ export const verifyOtp = async ({ email, code, purpose='login', name }) => {
   await record.save();
 
   let user = await User.findOne({ email });
-  if (!user && purpose !== 'forgot') {
-    user = await User.create({ email, name: name || email.split('@')[0] });
+  if (!user) {
+    if (purpose === 'login') {
+      // Should not reach here if requestOtp guard ran, but defend anyway
+      throw createError(404, 'User not found. Please register first.');
+    } else if (purpose === 'signup') {
+      // Create user only on signup
+      user = await User.create({ email, name: name || email.split('@')[0] });
+    } else {
+      throw createError(404, 'User not found');
+    }
   }
-  if (!user) throw createError(404, 'User not found');
 
   const { access, refresh } = signTokens(user._id.toString(), user.role);
   return { user, access, refresh };
