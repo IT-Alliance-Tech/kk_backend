@@ -6,12 +6,7 @@
 
 import ContactSubmission from '../models/ContactSubmission.model.js';
 
-/**
- * GET /api/admin/contact-submissions
- * List all contact form submissions (read-only) with pagination
- * Query params: page (default: 1), limit (default: 10)
- * Sorted by most recent first
- */
+
 export const listContactSubmissions = async (req, res) => {
   try {
     // Parse pagination params
